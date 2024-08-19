@@ -74,6 +74,13 @@ class MedianLpfFilter(RbfFilter):
         filtered_x = np.copy(x)
         filtered_x[x > mx] = mx
         return filtered_x
+    
+def is_valid_basis(x)
+    self._P[:] = self.pbasis(self._x)
+    if np.linalg.matrix_rank(self._P) < self.pdim():
+        raise ValueError(
+            "Sample points do not form a basis for the polynomial tail."
+        )
 
 
 class RbfModel:
@@ -110,21 +117,40 @@ class RbfModel:
 
     def __init__(
         self,
+        x,
+        y=np.array([]),
         rbf_type: RbfType = RbfType.CUBIC,
         iindex: tuple[int, ...] = (),
         filter: Optional[RbfFilter] = None,
     ):
+        # Params
         self.type = rbf_type
         self.iindex = iindex
         self.filter = RbfFilter() if filter is None else filter
 
+        # Points
+        self._m = len(x)
+        self._x = np.array(x)
+        assert self._x.ndim == 2 and len(self._x) > 0
+
+        # Reserve space
+        self.reserve(self._m, len(self._x))
+
+        # Values
+        self._fx[0:len(y)] = np.array(y)
+
+        # Coefficients
         self._valid_coefficients = True
-        self._m = 0
-        self._x = np.array([])
-        self._fx = np.array([])
-        self._coef = np.array([])
-        self._PHI = np.array([])
-        self._P = np.array([])
+
+        # Set auxiliary matrix _P
+        self._P[:] = self.pbasis(self._x)
+        if np.linalg.matrix_rank(self._P) < self.pdim():
+            raise ValueError(
+                "Sample points do not form a basis for the polynomial tail."
+            )
+
+        # Set auxiliary matrix _PHI
+        self._PHI[:] = self.phi(cdist(x, x))
 
     def reserve(self, maxeval: int, dim: int) -> None:
         """Reserve space for the RBF model.
@@ -142,61 +168,46 @@ class RbfModel:
         if maxeval < self._m:
             return
 
-        if self._x.size == 0:
-            self._x = np.empty((maxeval, dim))
-        else:
-            additional_rows = max(0, maxeval - self._x.shape[0])
-            self._x = np.concatenate(
-                (self._x, np.empty((additional_rows, dim))), axis=0
-            )
+        additional_rows = max(0, maxeval - self._x.shape[0])
+        self._x = np.concatenate(
+            (self._x, np.empty((additional_rows, dim))), axis=0
+        )
 
-        if self._fx.size == 0:
-            self._fx = np.empty(maxeval)
-        else:
-            additional_values = max(0, maxeval - self._fx.size)
-            self._fx = np.concatenate(
-                (self._fx, np.empty(additional_values)), axis=0
-            )
+        additional_values = max(0, maxeval - self._fx.size)
+        self._fx = np.concatenate(
+            (self._fx, np.empty(additional_values)), axis=0
+        )
 
-        if self._coef.size == 0:
-            self._coef = np.empty(maxeval + self.pdim())
-        else:
-            additional_values = max(0, maxeval + self.pdim() - self._coef.size)
-            self._coef = np.concatenate(
-                (self._coef, np.empty(additional_values)), axis=0
-            )
+        additional_values = max(0, maxeval + self.pdim() - self._coef.size)
+        self._coef = np.concatenate(
+            (self._coef, np.empty(additional_values)), axis=0
+        )
 
-        if self._PHI.size == 0:
-            self._PHI = np.empty((maxeval, maxeval))
-        else:
-            additional_rows = max(0, maxeval - self._PHI.shape[0])
-            additional_cols = max(0, maxeval - self._PHI.shape[1])
-            new_rows = max(maxeval, self._PHI.shape[0])
-            self._PHI = np.concatenate(
-                (
-                    np.concatenate(
-                        (
-                            self._PHI,
-                            np.empty((additional_rows, self._PHI.shape[1])),
-                        ),
-                        axis=0,
+        additional_rows = max(0, maxeval - self._PHI.shape[0])
+        additional_cols = max(0, maxeval - self._PHI.shape[1])
+        new_rows = max(maxeval, self._PHI.shape[0])
+        self._PHI = np.concatenate(
+            (
+                np.concatenate(
+                    (
+                        self._PHI,
+                        np.empty((additional_rows, self._PHI.shape[1])),
                     ),
-                    np.empty((new_rows, additional_cols)),
+                    axis=0,
                 ),
-                axis=1,
-            )
+                np.empty((new_rows, additional_cols)),
+            ),
+            axis=1,
+        )
 
-        if self._P.size == 0:
-            self._P = np.empty((maxeval, self.pdim()))
-        else:
-            additional_rows = max(0, maxeval - self._P.shape[0])
-            self._P = np.concatenate(
-                (
-                    self._P,
-                    np.empty((additional_rows, self.pdim())),
-                ),
-                axis=0,
-            )
+        additional_rows = max(0, maxeval - self._P.shape[0])
+        self._P = np.concatenate(
+            (
+                self._P,
+                np.empty((additional_rows, self.pdim())),
+            ),
+            axis=0,
+        )
 
     def dim(self) -> int:
         """Get the dimension of the domain space.
@@ -206,11 +217,7 @@ class RbfModel:
         out: int
             Dimension of the domain space.
         """
-        assert self._x.size == 0 or self._x.ndim == 2
-        if self._x.ndim == 2:
-            return self._x.shape[1]
-        else:
-            return 0
+        return self._x.shape[1]
 
     def pdim(self) -> int:
         """Get the dimension of the polynomial tail.

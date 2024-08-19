@@ -134,8 +134,6 @@ def initialize_surrogate(
     assert dim > 0
 
     # Initialize optional variables
-    if surrogateModel is None:
-        surrogateModel = RbfModel()
     if samples is None:
         samples = np.array([])
 
@@ -150,23 +148,22 @@ def initialize_surrogate(
     )
 
     # Number of initial samples
-    m0 = surrogateModel.nsamples()
+    m0 = 0 if surrogateModel is None else surrogateModel.nsamples()
     m = min(samples.shape[0], maxeval)
 
-    # Initialize out.x and out.fx
-    if m0 > 0:
-        iBest = np.argmin(surrogateModel.get_fsamples()).item()
-        out.x = surrogateModel.sample(iBest).copy()
-        out.fx = surrogateModel.get_fsamples()[iBest].item()
-    else:
-        out.x = np.array(
-            [(bounds[i][0] + bounds[i][1]) / 2 for i in range(dim)]
-        )
-        out.fx = np.Inf
-
     # Add new samples to the surrogate model
-    if m == 0 and surrogateModel.nsamples() == 0:
+    if m == 0 and m0 == 0:
         # Initialize surrogate model
+        m = min(maxeval, max(mineval, 2 * pdim))
+        x0 = Sampler(m).get_slhd_sample(bounds=bounds)
+        goodx0 = False
+        while goodx0 is False:
+            try:
+                surrogateModel = RbfModel(x0)
+                goodx0 = True
+            except ValueError:
+                x0 = Sampler(m).get_slhd_sample(bounds=bounds)
+                pass
         surrogateModel.create_initial_design(dim, bounds, mineval, maxeval)
         m = surrogateModel.nsamples()
     else:
@@ -190,6 +187,17 @@ def initialize_surrogate(
             raise ValueError(
                 "Initial samples are not sufficient to build the surrogate model"
             )
+
+    # Initialize out.x and out.fx
+    if m0 > 0:
+        iBest = np.argmin(surrogateModel.get_fsamples()).item()
+        out.x = surrogateModel.sample(iBest).copy()
+        out.fx = surrogateModel.get_fsamples()[iBest].item()
+    else:
+        out.x = np.array(
+            [(bounds[i][0] + bounds[i][1]) / 2 for i in range(dim)]
+        )
+        out.fx = np.Inf
 
     # Evaluate initial samples and update output
     if m > 0:
@@ -781,9 +789,9 @@ def multistart_stochastic_response_surface(
         if out_local.fx < out.fx:
             out.x[:] = out_local.x
             out.fx = out_local.fx
-        out.samples[
-            out.nfev : out.nfev + out_local.nfev, :
-        ] = out_local.samples
+        out.samples[out.nfev : out.nfev + out_local.nfev, :] = (
+            out_local.samples
+        )
         out.fsamples[out.nfev : out.nfev + out_local.nfev] = out_local.fsamples
         out.nfev = out.nfev + out_local.nfev
 
