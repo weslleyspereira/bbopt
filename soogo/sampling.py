@@ -39,6 +39,49 @@ from enum import Enum
 from scipy.spatial.distance import cdist
 from scipy.spatial import KDTree
 from scipy.stats import truncnorm
+from scipy.stats.qmc import LatinHypercube
+
+
+class SymmetricLatinHypercube(LatinHypercube):
+    def __init__(self, *args, **kwargs) -> None:
+        if "strength" in kwargs:
+            raise ValueError("Strength parameter is not supported.")
+
+        super().__init__(*args, **kwargs)
+
+        self.lhs_method = self._random_symmetric_lhs
+
+    def _random_symmetric_lhs(self, n: int = 1) -> np.ndarray:
+        """Symmetric LHS algorithm."""
+        k = n // 2
+
+        # Compute perturbations
+        if not self.scramble:
+            samples: np.ndarray | float = 0.5
+        else:
+            samples = np.full(np.empty((n, self.d)), 0.5)
+            samples[:k, :] = self.rng.uniform(size=(k, self.d))
+            samples[n - k :, :] = 1.0 - samples[k - 1 :: -1, :]
+
+        # Compute permutations
+        perms = np.empty((self.d, n), dtype=int)
+        perms[:, :k] = np.tile(np.arange(1, k + 1), (self.d, 1))  # type: ignore[arg-type]
+        for i in range(1, self.d):
+            self.rng.shuffle(perms[i, :k])
+            for j in range(k):
+                if self.rng.random() < 0.5:
+                    perms[i, n - 1 - j] = n - perms[i, j]
+                else:
+                    perms[i, n - 1 - j] = perms[i, j]
+                    perms[i, j] = n - perms[i, j]
+        perms = perms.T
+
+        samples = (perms - samples) / n
+
+        for i in range(k):
+            assert np.allclose(samples[i, :], 1 - samples[n - 1 - i, :])
+
+        return samples
 
 
 class SamplingStrategy(Enum):
@@ -52,29 +95,6 @@ class SamplingStrategy(Enum):
     DDS_UNIFORM = 4  #: Sample half via DDS, then half via uniform distribution
     SLHD = 5  #: Symmetric Latin Hypercube Design
     MITCHEL91 = 6  #: Cover empty regions in the search space
-
-
-def _slhd_permutation_matrix(m: int, d: int):
-    # Generate permutation matrix P
-    P = np.zeros((m, d), dtype=int)
-    P[:, 0] = np.arange(m)
-    if m % 2 == 0:
-        k = m // 2
-    else:
-        k = (m - 1) // 2
-        P[k, :] = k * np.ones((1, d))
-    for j in range(1, d):
-        P[0:k, j] = np.random.permutation(np.arange(k))
-
-        for i in range(k):
-            # Use numpy functions for better performance
-            if np.random.rand() < 0.5:
-                P[m - 1 - i, j] = m - 1 - P[i, j]
-            else:
-                P[m - 1 - i, j] = P[i, j]
-                P[i, j] = m - 1 - P[i, j]
-
-    return P
 
 
 class Sampler:
